@@ -78,7 +78,7 @@ class Interpolator1D(eqx.Module):
         x: jax.Array,
         f: jax.Array,
         method: str = "cubic",
-        extrap: Union[bool, float, tuple] = False,
+        extrap: Union[bool, float, tuple, jax.Array] = False,
         period: Union[None, float] = None,
         **kwargs,
     ):
@@ -424,7 +424,7 @@ def interp1d(
     f: jax.Array,
     method: str = "cubic",
     derivative: int = 0,
-    extrap: Union[bool, float, tuple] = False,
+    extrap: Union[bool, float, tuple, jax.Array] = False,
     period: Union[None, float] = None,
     **kwargs,
 ):
@@ -464,6 +464,8 @@ def interp1d(
     period : float > 0, None
         periodicity of the function. If given, function is assumed to be periodic
         on the interval [0,period]. None denotes no periodicity
+    axis : int, None
+        The axis in which the interpolation takes place
 
     Returns
     -------
@@ -492,6 +494,13 @@ def interp1d(
         "x and f must be arrays of equal length",
     )
     errorif(method not in METHODS_1D, ValueError, f"unknown method {method}")
+
+    # ensure that dimension of extrapolation array is the same as the 
+    errorif(
+        (len(extrap.shape) > 1) & (f.shape[1:] != extrap.shape[1:]),
+        ValueError,
+        "Dimensions of extrap must align with dimensions of f"
+    )
 
     lowx, highx = _parse_extrap(extrap, 1)
 
@@ -1127,6 +1136,9 @@ def _parse_extrap(extrap, n):
         return tuple(e for _ in range(n) for e in extrap)
     elif len(extrap) == n and all(len(extrap[i]) == 2 for i in range(n)):
         return tuple(eij for ei in extrap for eij in ei)
+    elif len(extrap.shape) > 1:
+        assert extrap.shape[0] == 2, "first dimension of extrap must be (lo, hi)"
+        return extrap
     else:
         raise ValueError(
             "extrap should either be a scalar, 2 element sequence (lo, hi), "
@@ -1139,8 +1151,8 @@ def _extrap(
     xq: jax.Array,
     fq: jax.Array,
     x: jax.Array,
-    lo: Union[bool, float],
-    hi: Union[bool, float],
+    lo: Union[bool, float, jax.Array],
+    hi: Union[bool, float, jax.Array],
 ):
     """Clamp or extrapolate values outside bounds."""
 
@@ -1158,22 +1170,44 @@ def _extrap(
 
     def noclip(fq, *_):
         return fq
-
-    # if extrap = True, don't clip. If it's false or numeric, clip to that value
-    # isbool(x) & bool(x) is testing if extrap is True but works for np/jnp bools
-    fq = jax.lax.cond(
-        isbool(lo) & jnp.asarray(lo).astype(bool),
-        noclip,
-        loclip,
-        fq,
-        lo,
-    )
-    fq = jax.lax.cond(
-        isbool(hi) & jnp.asarray(hi).astype(bool),
-        noclip,
-        hiclip,
-        fq,
-        hi,
-    )
+    
+    if len(fq.shape) > 1:
+        fq = jnp.array([
+            jax.lax.cond(
+                isbool(lo[i]) & jnp.asarray(lo[i]).astype(bool),
+                noclip,
+                loclip,
+                fq[:,i],
+                lo[i],
+            )
+            for i in range(lo.shape[0])
+        ]).T
+        fq = jnp.array([
+            jax.lax.cond(
+                isbool(hi[i]) & jnp.asarray(hi[i]).astype(bool),
+                noclip,
+                hiclip,
+                fq[:,i],
+                hi[i],
+            )
+            for i in range(hi.shape[0])
+        ]).T
+    else:
+        # if extrap = True, don't clip. If it's false or numeric, clip to that value
+        # isbool(x) & bool(x) is testing if extrap is True but works for np/jnp bools
+        fq = jax.lax.cond(
+            isbool(lo) & jnp.asarray(lo).astype(bool),
+            noclip,
+            loclip,
+            fq,
+            lo,
+        )
+        fq = jax.lax.cond(
+            isbool(hi) & jnp.asarray(hi).astype(bool),
+            noclip,
+            hiclip,
+            fq,
+            hi,
+        )
 
     return fq
