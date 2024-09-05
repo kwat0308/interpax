@@ -558,18 +558,18 @@ def interp1d(
         dxi = jnp.where(dx == 0, 0, 1 / dx)
         t = delta * dxi
 
-        f0 = jnp.take(f, i - 1, axis)
-        f1 = jnp.take(f, i, axis)
-        fx0 = (jnp.take(fx, i - 1, axis).T * dx).T
-        fx1 = (jnp.take(fx, i, axis).T * dx).T
+        f0 = jnp.take_along_axis(f, i - 1, axis)
+        f1 = jnp.take_along_axis(f, i, axis)
+        fx0 = (jnp.take_along_axis(fx, i - 1, axis) * dx)
+        fx1 = (jnp.take_along_axis(fx, i, axis) * dx)
 
         F = jnp.stack([f0, f1, fx0, fx1], axis=0).T
         coef = jnp.vectorize(jnp.matmul, signature="(n,n),(n)->(n)")(A_CUBIC, F).T
-        ttx = _get_t_der(t, derivative, dxi)
-        fq = jnp.einsum("ji...,ij->i...", coef, ttx)
+        ttx = _get_t_der(t, derivative, dxi.T).T
+        fq = jnp.squeeze(jnp.einsum("ij...,ij...->j...", coef, ttx))
 
     fq = _extrap(xq, fq, x, lowx, highx)
-    return fq.reshape(outshape)
+    return jnp.squeeze(fq)
 
 
 @partial(jit, static_argnames="method")
@@ -1106,7 +1106,7 @@ def _get_t_der(t: jax.Array, derivative: int, dxi: jax.Array):
     """Get arrays of [1,t,t^2,t^3] for cubic interpolation."""
     t0 = jnp.zeros_like(t)
     t1 = jnp.ones_like(t)
-    dxi = jnp.atleast_1d(dxi)[:, None]
+    dxi = jnp.atleast_1d(dxi)[..., None]
     # derivatives of monomials
     d0 = lambda: jnp.array([t1, t, t**2, t**3]).T * dxi**0
     d1 = lambda: jnp.array([t0, t1, 2 * t, 3 * t**2]).T * dxi
@@ -1172,26 +1172,14 @@ def _extrap(
         return fq
     
     if len(fq.shape) > 1:
-        fq = jnp.array([
-            jax.lax.cond(
-                isbool(lo[i]) & jnp.asarray(lo[i]).astype(bool),
-                noclip,
-                loclip,
-                fq[:,i],
-                lo[i],
-            )
-            for i in range(lo.shape[0])
-        ]).T
-        fq = jnp.array([
-            jax.lax.cond(
-                isbool(hi[i]) & jnp.asarray(hi[i]).astype(bool),
-                noclip,
-                hiclip,
-                fq[:,i],
-                hi[i],
-            )
-            for i in range(hi.shape[0])
-        ]).T
+        # errorif(
+        #     jnp.logical_or(lo.shape != fq.shape, hi.shape != fq.shape),
+        #     AssertionError,
+        #     f"Dimensions of extrapolated arrays (lo : {lo.shape}, hi : {hi.shape}) must match shape of interpolated values (fq : {fq.shape})."
+        # )
+
+        fq = jnp.where(xq < x[0], lo, fq)
+        fq = jnp.where(xq > x[-1], hi, fq)
     else:
         # if extrap = True, don't clip. If it's false or numeric, clip to that value
         # isbool(x) & bool(x) is testing if extrap is True but works for np/jnp bools
