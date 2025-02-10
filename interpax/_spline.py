@@ -496,11 +496,12 @@ def interp1d(
     errorif(method not in METHODS_1D, ValueError, f"unknown method {method}")
 
     # ensure that dimension of extrapolation array is the same as the 
-    errorif(
-        (len(extrap.shape) > 1) & (f.shape[1:] != extrap.shape[1:]),
-        ValueError,
-        "Dimensions of extrap must align with dimensions of f"
-    )
+    if type(extrap) != bool:
+        errorif(
+            (len(extrap.shape) > 1) & (f.shape[1:] != extrap.shape[1:]),
+            ValueError,
+            "Dimensions of extrap must align with dimensions of f"
+        )
 
     lowx, highx = _parse_extrap(extrap, 1)
 
